@@ -20,6 +20,15 @@ struct EmailToken {
     destinatario: String,
 }
 
+#[derive(Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct EmailActivation {
+    user: String,
+    token: String,
+    minutos: String,
+    destinatario: String,
+}
+
 
 #[derive(Serialize)]
 #[serde(crate = "rocket::serde")]
@@ -179,10 +188,77 @@ fn send_email_token(email: Json<EmailToken>) -> Result<Json<ApiResponse>, (Statu
         .map_err(|e| EmailError::SendFailed(format!("{:?}", e)).response())
 }
 
+#[post("/sendEmailActivation", data = "<email>")]
+fn send_email_activation(email: Json<EmailActivation>) -> Result<Json<ApiResponse>, (Status, Json<ErrorResponse>)> {
+    let body = format!(
+    r#"
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; background-color: #ffffff; margin: 0; padding: 0; }}
+            .container {{ max-width: 520px; margin: 0 auto; padding: 40px 30px; }}
+            .content {{ color: #1f2933; font-size: 15px; line-height: 1.6; }}
+            .token-box {{ text-align: center; background-color: #EAF9F1; border: 1px solid #2FBF83; border-radius: 8px; padding: 18px; margin: 24px 0; }}
+            .token {{ font-size: 26px; font-weight: bold; letter-spacing: 4px; color: #1a8f5e; }}
+            .footer {{ text-align: center; font-size: 11px; color: #9aa5b1; margin-top: 30px; line-height: 1.6; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="content">
+                <p>Hola <strong>{}</strong>,</p>
+                <p>Gracias por registrarte en PATO. Usa el siguiente token para activar tu cuenta:</p>
+            </div>
+            <div class="token-box">
+                <span class="token">{}</span>
+            </div>
+            <div class="content">
+                <p>Este token fue programado para vencerse en {} minutos. Si no solicitaste este registro, ignora este mensaje.</p>
+            </div>
+            <div class="footer">
+                <p>Este mensaje fue generado automáticamente.<br>Por favor no respondas a este correo.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    "#,
+    email.0.user,
+    email.0.token,
+    email.0.minutos
+);
+
+    let sender = env::var("Email")
+        .map_err(|_| EmailError::MissingEnvVar("Email".to_string()).response())?;
+    let from = format!("PATO <{}>", sender);
+
+    let message = Message::builder()
+        .from(
+            from.parse()
+                .map_err(|_| EmailError::InvalidSender.response())?,
+        )
+        .to(email
+            .destinatario
+            .parse()
+            .map_err(|_| EmailError::InvalidRecipient(email.destinatario.clone()).response())?)
+        .subject("Activa tu cuenta")
+        .header(ContentType::TEXT_HTML)
+        .body(body)
+        .map_err(|e| EmailError::InvalidMessage(format!("{:?}", e)).response())?;
+
+    let smtp = build_smtp()
+        .map_err(|e| e.response())?;
+
+    smtp.send(&message)
+        .map(|_| Json(ApiResponse { message: "Correo de activación enviado correctamente".into() }))
+        .map_err(|e| EmailError::SendFailed(format!("{:?}", e)).response())
+}
+
 #[launch]
 fn rocket() -> _ {
     dotenvy::dotenv().ok();
-    rocket::build().mount("/api", routes![send_email_token])
+    rocket::build().mount("/api", routes![send_email_token, send_email_activation])
 }
 /*
 #[derive(Deserialize)]
